@@ -220,7 +220,6 @@ __marimo__/
 # Ignore datasets and models
 data/train/*.tsv
 data/test/*.tsv
-models/*.pkl
 results/*.csv
 results/*.png
 
