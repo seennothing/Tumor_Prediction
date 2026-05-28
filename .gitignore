@@ -227,3 +227,7 @@ results/*.png
 # Ignore Python cache
 __pycache__/
 *.pyc
+data/train/*.tsv
+data/test/*.tsv
+data/processed/*.pkl
+__pycache__/
