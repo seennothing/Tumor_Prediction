@@ -29,13 +29,13 @@ python run_pipeline.py
 **개별 실행:**
 ```bash
 # Task 1: 종양 vs 정상 분류
-python src/task1_tumor_normal.py --mode predict
+python src/task1.py --mode predict
 
 # Task 2: LUAD vs LSCC 분류
-python src/task2_luad_lscc.py --mode predict
+python src/task2.py --mode predict
 
 # Task 3: 생존 예측
-python src/task3_survival.py --mode predict
+python src/task3.py --mode predict
 ```
 
 **3. 결과 확인**
@@ -58,9 +58,9 @@ python src/task3_survival.py --mode predict
 python src/preprocess.py
 
 # 2. 모델 학습
-python src/task1_tumor_normal.py --mode train
-python src/task2_luad_lscc.py --mode train
-python src/task3_survival.py --mode train
+python src/task1.py --mode train
+python src/task2.py --mode train
+python src/task3.py --mode train
 ```
 
 ### 디렉토리 구조
@@ -74,9 +74,8 @@ python src/task3_survival.py --mode train
     │   └── processed/             # 전처리 완료된 캐시 데이터
     ├── src/
     │   ├── preprocess.py          # 생물학적 필터링 및 데이터 병합
-    │   ├── task1_tumor_normal.py  # 단백질 기반 종양/정상 분류
-    │   ├── task2_luad_lscc.py     # RNA 기반 암종 분류
-    │   ├── task3_survival.py      # 멀티모달(Protein+RNA) 생존 예측
-    │   └── verify_sanity.py       # 인퍼런스 파이프라인 무결성 검증
+    │   ├── task1.py               # 단백질 기반 종양/정상 분류
+    │   ├── task2.py               # RNA 기반 암종 분류
+    │   └── task3.py               # 멀티모달(Protein+RNA) 생존 예측
     ├── models/                    # 학습된 모델 가중치 (.pkl)
     └── results/                   # 예측 결과 출력 폴더 (.csv)
