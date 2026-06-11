@@ -1,8 +1,8 @@
 """
 Survival Prediction (Binary Classification).
 Modality: Multi-modal Integration (Protein + RNA).
-Architecture: Modality-Specific Variance Filter -> SelectKBest -> Random Forest.
-Validation: StratifiedKFold.
+Architecture: Modality-Specific PCA via ColumnTransformer -> Regularized Logistic Regression.
+Validation: StratifiedKFold with GridSearchCV.
 """
 
 import argparse
@@ -13,11 +13,12 @@ from pathlib import Path
 import warnings
 
 from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
-from sklearn.feature_selection import SelectKBest, f_classif
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import StratifiedKFold, cross_validate
+from sklearn.decomposition import PCA
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold, GridSearchCV
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -36,7 +37,14 @@ def _load_and_prefix(filepath: Path, prefix: str) -> pd.DataFrame:
     return df
 
 def _apply_variance_filter(df: pd.DataFrame, top_k: int) -> pd.DataFrame:
-    return df[df.var(skipna=True).nlargest(top_k).index]
+    # 1. Biological Noise Filter: Drop the bottom 50% of genes with lowest mean expression
+    means = df.mean(axis=0, skipna=True)
+    valid_genes = means[means > means.median()].index
+    df_filtered = df[valid_genes]
+    
+    # 2. Variance Filter: Select the top_k most highly variable genes among the highly expressed ones
+    top_genes = df_filtered.var(skipna=True).nlargest(top_k).index
+    return df_filtered[top_genes]
 
 def load_data():
     luad_p = _load_and_prefix(TRAIN_DIR / "LUAD_trainingset_protein_expression_tumor.tsv", "prot")
@@ -47,8 +55,8 @@ def load_data():
     prot_common = list(set(luad_p.columns) & set(lscc_p.columns))
     rna_common = list(set(luad_r.columns) & set(lscc_r.columns))
     
-    X_prot = _apply_variance_filter(pd.concat([luad_p[prot_common], lscc_p[prot_common]]), 1000)
-    X_rna = _apply_variance_filter(pd.concat([luad_r[rna_common], lscc_r[rna_common]]), 1000)
+    X_prot = _apply_variance_filter(pd.concat([luad_p[prot_common], lscc_p[prot_common]]), 1500)
+    X_rna = _apply_variance_filter(pd.concat([luad_r[rna_common], lscc_r[rna_common]]), 1500)
     X_multi = pd.concat([X_prot, X_rna], axis=1)
     
     luad_surv = pd.read_csv(TRAIN_DIR / "LUAD_trainingset_overall_survival.tsv", sep="\t").set_index("case_id")
@@ -59,24 +67,57 @@ def load_data():
     return X_multi.loc[common_patients], y_df.loc[common_patients, "OS_event"].values
 
 def build_pipeline() -> Pipeline:
-    return Pipeline([
+    # Modality-specific dimensionality reduction branches
+    prot_pipe = Pipeline([
         ('imputer', SimpleImputer(strategy='median')),
         ('scaler', StandardScaler()),
-        ('selector', SelectKBest(f_classif, k=100)),
-        ('clf', RandomForestClassifier(max_depth=4, n_estimators=300, class_weight='balanced', random_state=42, n_jobs=-1))
+        ('pca', PCA(random_state=42))
+    ])
+    
+    rna_pipe = Pipeline([
+        ('imputer', SimpleImputer(strategy='median')),
+        ('scaler', StandardScaler()),
+        ('pca', PCA(random_state=42))
+    ])
+    
+    # Dynamically route features to their respective pipelines based on prefixes
+    preprocessor = ColumnTransformer([
+        ('prot', prot_pipe, make_column_selector(pattern='^prot_')),
+        ('rna', rna_pipe, make_column_selector(pattern='^rna_'))
+    ])
+    
+    return Pipeline([
+        ('preprocessor', preprocessor),
+        ('clf', LogisticRegression(class_weight='balanced', max_iter=1000, random_state=42))
     ])
 
 def train():
     X, y = load_data()
-    pipeline = build_pipeline()
+    base_pipeline = build_pipeline()
     cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
     
-    cv_results = cross_validate(pipeline, X, y, cv=cv, scoring=['accuracy', 'f1', 'roc_auc'])
-    print(f"[Task 3] CV ROC-AUC: {cv_results['test_roc_auc'].mean():.4f} ± {cv_results['test_roc_auc'].std():.4f}")
+    # Hyperparameter Grid: Optimizing PCA dimensions and L2 Regularization (C)
+    param_grid = {
+        'preprocessor__prot__pca__n_components': [15, 30, 50],
+        'preprocessor__rna__pca__n_components': [15, 30, 50],
+        'clf__C': [0.01, 0.1, 1.0]
+    }
     
-    pipeline.fit(X, y)
+    print("[Task 3] Executing Modality-Specific GridSearchCV...")
+    grid = GridSearchCV(base_pipeline, param_grid, cv=cv, scoring='roc_auc', n_jobs=-1)
+    grid.fit(X, y)
+    
+    # Extract the standard deviation of the best model for volatility tracking
+    best_idx = grid.best_index_
+    best_mean = grid.cv_results_['mean_test_score'][best_idx]
+    best_std = grid.cv_results_['std_test_score'][best_idx]
+    
+    print(f"[Task 3] Best CV ROC-AUC: {best_mean:.4f} ± {best_std:.4f}")
+    print(f"[Task 3] Best Hyperparameters: {grid.best_params_}")
+    
+    best_pipeline = grid.best_estimator_
     MODEL_DIR.mkdir(exist_ok=True)
-    joblib.dump({'pipeline': pipeline, 'features': X.columns.tolist()}, MODEL_PATH)
+    joblib.dump({'pipeline': best_pipeline, 'features': X.columns.tolist()}, MODEL_PATH)
 
 def predict():
     saved_model = joblib.load(MODEL_PATH)
